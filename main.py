@@ -7,12 +7,23 @@ from database.database import *
 from api.vkontake import VkAPI
 
 
+def user_search_generator(request_data: dict, vk_api_with_person_token: vk_api.VkApi):
+    request_data.update({"count": 1})
+    request_data.update({"offset": 0})
+
+    while True:
+        result = vk_api_with_person_token.method("users.search", request_data)
+        for item in result['items']:
+            yield item
+        request_data['offset'] += 1
+
+
 # Осуществляем поиск партнера, находим самые популярные фотографии и возвращаем их пользователю
 def search_sex_partner(user: User, vk_api_with_group_token):
     vk_api_with_person_token = vk_api.VkApi(token=user_token)
     # Получаем список пользователей
     request_data = set_search_parameters(user)
-    result = vk_api_with_person_token.method("users.search", request_data)
+
 
     # Показываем пользователю найденных половых партнеров
     text = f"😍 Мы нашли для вас профили пользователей готовых к знакомствам!"
@@ -20,7 +31,7 @@ def search_sex_partner(user: User, vk_api_with_group_token):
     time.sleep(2)
 
     i = 1
-    for data in result['items']:
+    for data in user_search_generator(request_data, vk_api_with_person_token):
         # Проверяем, показывали ли этого партнера его ранее
         if not db_check_is_new_partner(user.id, data['id']):
             continue
