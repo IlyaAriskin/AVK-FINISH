@@ -53,11 +53,8 @@ def db_create_partners():
         cursor.execute(
             """CREATE TABLE IF NOT EXISTS partners(
                 id serial,
-                vk_id varchar(30) PRIMARY KEY,
-                first_name varchar(100) NOT NULL,
-                last_name varchar(100) NOT NULL,
-                main_photo varchar (256) NOT NULL,
-                profile_url varchar(200));"""
+                vk_id varchar(30) PRIMARY KEY);
+                """
         )
     print("[+] Table partners created")
 
@@ -75,8 +72,8 @@ def db_insert_partner(partner: Partner):
             return
         # insert
         cursor.execute(
-            f"""INSERT INTO partners (vk_id, first_name, last_name, main_photo, profile_url) 
-            VALUES ('{partner.id}', '{partner.first_name}', '{partner.last_name}', '{partner.main_photo}', '{partner.profile_url}');"""
+            f"""INSERT INTO partners (vk_id) 
+            VALUES ('{partner.id}');"""
         )
         print(f"[+] Partner with vk_id={partner.id} inserted")
 
