@@ -1,26 +1,36 @@
 import time
 from datetime import datetime
 from random import randrange
+
 import vk_api
 from vk_api.longpoll import VkLongPoll
 from database.database import *
 from api.vkontake import VkAPI
 
+#экономить так экономить
+def user_search_generator(request_data: dict, vk_api_with_person_token: vk_api.VkApi):
+    request_data.update({"count": 10})
+    request_data.update({"offset": 0})
+
+    while True:
+        result = vk_api_with_person_token.method("users.search", request_data)
+        for item in result['items']:
+            yield item
+        request_data['offset'] += 10
 
 # Осуществляем поиск партнера, находим самые популярные фотографии и возвращаем их пользователю
 def search_sex_partner(user: User, vk_api_with_group_token):
     vk_api_with_person_token = vk_api.VkApi(token=user_token)
     # Получаем список пользователей
     request_data = set_search_parameters(user)
-    result = vk_api_with_person_token.method("users.search", request_data)
 
     # Показываем пользователю найденных половых партнеров
-    text = f"😍 Мы нашли для вас профили пользователей готовых к знакомствам!"
+    text = f"Поиск закончен!\n\n Приступаю к показу анкет."
     VkAPI.write_msg(user, text, vk_api_with_group_token)
     time.sleep(2)
 
-    i = 1
-    for data in result['items']:
+    i = 0
+    for data in user_search_generator(request_data, vk_api_with_person_token):
         # Проверяем, показывали ли этого партнера его ранее
         if not db_check_is_new_partner(user.id, data['id']):
             continue
@@ -31,17 +41,15 @@ def search_sex_partner(user: User, vk_api_with_group_token):
         except:
             continue
         # Имя и фамилия
+        i = i + 1
         partner = Partner(data['id'])
         partner.set_first_name(data['first_name'])
         partner.set_last_name(data['last_name'])
         full_name = partner.first_name + " " + partner.last_name
-        text = f"Кандидат #{i}\n"
-        text += f"Имя: {full_name}"
+        text = f"Анкета #{i}: {full_name}"
+        #text += f"{full_name}"
         partner.set_main_photo(main_photo_url)
         VkAPI.write_msg(user, text, vk_api_with_group_token)
-
-        # Инкремент цикла
-        i = i + 1
 
         # Ссылка на страницу во вконтакте
         partner.generate_profile_url()
@@ -65,15 +73,16 @@ def search_sex_partner(user: User, vk_api_with_group_token):
             if answer_of_user == "Да":
                 break
             elif answer_of_user == "Нет":
-                text = "Просмотр партнеров окончен. Досвидания!"
+                text = "Просмотр анкет окончен. Досвидания!"
                 VkAPI.write_msg(user, text, vk_api_with_group_token)
-                return
+                start_bot_execution()
+                break
             else:
                 text = "Не понял вашего ответа.\nПожалуйста, нажмите Да или Нет..."
                 VkAPI.write_msg(user, text, vk_api_with_group_token)
 
 
-# Отобразить фотографии парнтёра
+# Отобразить фотографии партнёра
 def show_partner_photos(partner, photos, user, vk_api_with_group_token):
     z = 0
     for photo in photos:
@@ -108,6 +117,7 @@ def set_search_parameters(user):
     request_data = {
         "sex": sex_partner,  # пол партнера для поиска
         "count": 1000,  # кол-во возвращаемых результатов
+        "offset": 0,   # сдвиг
         "city": city_id,
         "status": 6,  # в активном поиске
         "age_from": age_from,  # возрат "от"
@@ -120,10 +130,9 @@ def set_search_parameters(user):
     }
     return request_data
 
-
 # Выбран пункт меню "Начать поиск пары для знакомства"
 def menu_start_search(user: User, vk):
-    text = "Анализиуем ваши данные..."
+    text = "Собираю информацию!"
     VkAPI.write_msg(user, text, vk)
 
     # Получаем информцию о пользователе и пишем в базу данных
@@ -131,7 +140,7 @@ def menu_start_search(user: User, vk):
     db_insert_user(user)
 
     # Призыв к следующему действию
-    VkAPI.write_msg(user, r"Нажмите 'Да', если готовы начать ♥", vk)
+    VkAPI.write_msg(user, r"Нажмите 'Да' для продолжения.", vk)
 
     # Ожидаем ответ
     while True:
@@ -140,7 +149,7 @@ def menu_start_search(user: User, vk):
             search_sex_partner(user, vk_api_with_group_token=vk)
             break
         elif answer_of_user == "Нет":
-            text = "Одинокого человека ответ :)"
+            text = "Если что, пиши..."
             VkAPI.write_msg(user, text, vk)
             start_bot_execution()
             break
@@ -185,6 +194,9 @@ def show_top_menu(longpoll, user, vk):
             break
         # 2 => подпрограмма, вызываемая если пользователь выбрал 2 пункт меню
         elif answer_of_user == "Нет":
+            text = "Если передумаешь, пиши!"
+            VkAPI.write_msg(user, text, vk)
+            start_bot_execution()
             break
         # ... если введен несуществующий пункт меню
         else:
@@ -196,7 +208,7 @@ def show_top_menu(longpoll, user, vk):
 
 # Показать подменю
 def show_sub_menu(user: User, vk):
-    text = "Начать поиск пары для знакомств?"
+    text = "Начать поиск анкет?"
     VkAPI.write_msg(user, text, vk)
 
 
@@ -217,5 +229,5 @@ def start_bot_execution():
 
 
 if __name__ == '__main__':
-    print("Start bot execution:", datetime.now())
+    print("Запуск бота:", datetime.now())
     start_bot_execution()
