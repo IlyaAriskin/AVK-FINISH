@@ -2,41 +2,32 @@ import time
 from datetime import datetime
 from random import randrange
 
-import vk_api
-from vk_api.longpoll import VkLongPoll
-from database.database import *
 from api.vkontake import VkAPI
+from config.settings import user_token, group_token
+from database.database import db, init_database
+from users.partner import Partner
+from users.user import User
 
-#экономить так экономить
-def user_search_generator(request_data: dict, vk_api_with_person_token: vk_api.VkApi):
-    request_data.update({"count": 10})
-    request_data.update({"offset": 0})
-
-    while True:
-        result = vk_api_with_person_token.method("users.search", request_data)
-        for item in result['items']:
-            yield item
-        request_data['offset'] += 10
 
 # Осуществляем поиск партнера, находим самые популярные фотографии и возвращаем их пользователю
-def search_sex_partner(user: User, vk_api_with_group_token):
-    vk_api_with_person_token = vk_api.VkApi(token=user_token)
+def search_sex_partner(user: User, vk: VkAPI):
     # Получаем список пользователей
     request_data = set_search_parameters(user)
 
     # Показываем пользователю найденных половых партнеров
     text = f"Поиск закончен!\n\n Приступаю к показу анкет."
-    VkAPI.write_msg(user, text, vk_api_with_group_token)
+    vk.write_msg(user, text)
     time.sleep(2)
 
     i = 0
-    for data in user_search_generator(request_data, vk_api_with_person_token):
+    for data in vk.user_search_generator(request_data):
+
         # Проверяем, показывали ли этого партнера его ранее
-        if not db_check_is_new_partner(user.id, data['id']):
+        if not db.check_is_new_partner(user.id, data['id']):
             continue
         # Получаем фотографии
         try:
-            photos = VkAPI.get_photos_of_person(data['id'], vk_api_with_person_token)
+            photos = vk.get_photos_of_person(data['id'])
             main_photo_url = photos[0]['sizes'][0]['url']
         except:
             continue
@@ -47,43 +38,60 @@ def search_sex_partner(user: User, vk_api_with_group_token):
         partner.set_last_name(data['last_name'])
         full_name = partner.first_name + " " + partner.last_name
         text = f"Анкета #{i}: {full_name}"
-        #text += f"{full_name}"
+        # text += f"{full_name}"
         partner.set_main_photo(main_photo_url)
-        VkAPI.write_msg(user, text, vk_api_with_group_token)
+        vk.write_msg(user, text)
 
         # Ссылка на страницу во вконтакте
         partner.generate_profile_url()
         text = f"Профиль: {partner.profile_url}"
-        VkAPI.write_msg(user, text, vk_api_with_group_token)
+        vk.write_msg(user, text)
 
         # Отобразить фотографии партнёра
-        show_partner_photos(partner, photos, user, vk_api_with_group_token)
+        show_partner_photos(partner, photos, user, vk)
 
         # Записываем информацию о пользователе в базу данных
-        db_insert_partner(partner)
+        db.insert_partner(partner)
 
         # Записываем информацию, что этот пользователь был просмотрен
-        db_insert_user_partner(user.id, data['id'])
+        db.insert_user_partner(user.id, data['id'])
 
         # Запрос на показ еще одного партнера
-        VkAPI.write_msg(user, "Показать еще одного?", vk_api_with_group_token)
+        vk.write_msg(user, "Показать еще одного?")
 
         while True:
-            answer_of_user = VkAPI.wait_for_answer_from_user(VkLongPoll(vk_api_with_group_token))['text']
+            answer_of_user = vk.wait_for_answer_from_user()['text']
             if answer_of_user == "Да":
                 break
             elif answer_of_user == "Нет":
                 text = "Просмотр анкет окончен. Досвидания!"
-                VkAPI.write_msg(user, text, vk_api_with_group_token)
+                vk.write_msg(user, text)
                 start_bot_execution()
-                break
+                return
             else:
                 text = "Не понял вашего ответа.\nПожалуйста, нажмите Да или Нет..."
-                VkAPI.write_msg(user, text, vk_api_with_group_token)
+                vk.write_msg(user, text)
+
+
+    vk.write_msg(user, "Список анкет завершен. Посмотреть заново?")
+    while True:
+        answer_of_user = vk.wait_for_answer_from_user()['text']
+        if answer_of_user == "Да":
+            db.delete_all_user_partners(user.id)
+            search_sex_partner(user, vk)
+            return
+        elif answer_of_user == "Нет":
+            text = "Просмотр анкет окончен. Досвидания!"
+            vk.write_msg(user, text)
+            start_bot_execution()
+            return
+        else:
+            text = "Не понял вашего ответа.\nПожалуйста, нажмите Да или Нет..."
+            vk.write_msg(user, text)
 
 
 # Отобразить фотографии партнёра
-def show_partner_photos(partner, photos, user, vk_api_with_group_token):
+def show_partner_photos(partner, photos, user, vk: VkAPI):
     z = 0
     for photo in photos:
         if z == 3:
@@ -96,7 +104,7 @@ def show_partner_photos(partner, photos, user, vk_api_with_group_token):
             'attachment': attachament,
             'random_id': randrange(10 ** 7)
         }
-        vk_api_with_group_token.method('messages.send', photo_data)
+        vk.group_api.method('messages.send', photo_data)
         z = z + 1
 
 
@@ -117,7 +125,7 @@ def set_search_parameters(user):
     request_data = {
         "sex": sex_partner,  # пол партнера для поиска
         "count": 1000,  # кол-во возвращаемых результатов
-        "offset": 0,   # сдвиг
+        "offset": 0,  # сдвиг
         "city": city_id,
         "status": 6,  # в активном поиске
         "age_from": age_from,  # возрат "от"
@@ -130,64 +138,65 @@ def set_search_parameters(user):
     }
     return request_data
 
+
 # Выбран пункт меню "Начать поиск пары для знакомства"
-def menu_start_search(user: User, vk):
+def menu_start_search(user: User, vk: VkAPI):
     text = "Собираю информацию!"
-    VkAPI.write_msg(user, text, vk)
+    vk.write_msg(user, text)
 
     # Получаем информцию о пользователе и пишем в базу данных
     set_info_about_user(user, vk)
-    db_insert_user(user)
+    db.insert_user(user)
 
     # Призыв к следующему действию
-    VkAPI.write_msg(user, r"Нажмите 'Да' для продолжения.", vk)
+    vk.write_msg(user, r"Нажмите 'Да' для продолжения.")
 
     # Ожидаем ответ
     while True:
-        answer_of_user = VkAPI.wait_for_answer_from_user(VkLongPoll(vk))['text']
+        answer_of_user = vk.wait_for_answer_from_user()['text']
         if answer_of_user == "Да":
-            search_sex_partner(user, vk_api_with_group_token=vk)
+            search_sex_partner(user, vk)
             break
         elif answer_of_user == "Нет":
             text = "Если что, пиши..."
-            VkAPI.write_msg(user, text, vk)
+            vk.write_msg(user, text)
             start_bot_execution()
             break
         else:
             text = "Не понял вашего ответа.\nПожалуйста, введите ответ еще раз..."
-            VkAPI.write_msg(user, text, vk)
+            vk.write_msg(user, text)
 
 
 # Заполняем в экземлпяр класса User информацию
-def set_info_about_user(user: User, vk) -> dict:
+def set_info_about_user(user: User, vk: VkAPI):
     # получаем id пользователя
-    VkAPI.write_msg(user, f"[+] Ваш id пользователя: {user.id}", vk)
+    vk.write_msg(user, f"[+] Ваш id пользователя: {user.id}")
     # получить город
-    city = VkAPI.get_user_city(user, vk)
+    city = vk.get_user_city(user)
     user.set_city_title(city['title'])
     user.set_city_id(city['id'])
-    VkAPI.write_msg(user, f"[+] Ваш город: {user.city_title}", vk)
+    vk.write_msg(user, f"[+] Ваш город: {user.city_title}")
     # получить пол
-    sex = VkAPI.get_user_sex(user, vk)
+    sex = vk.get_user_sex(user)
     user.set_sex(sex)
     user_sex_text = "Женский" if user.sex == 1 else "Мужской"
-    VkAPI.write_msg(user, f"[+] Ваш пол: {user_sex_text}", vk)
+    vk.write_msg(user, f"[+] Ваш пол: {user_sex_text}")
     # получить возраст
-    age = VkAPI.get_user_age(user, vk)
+    age = vk.get_user_age(user)
     user.set_age(age)
-    VkAPI.write_msg(user, f"[+] Ваш возраст: {user.age}", vk)
+    vk.write_msg(user, f"[+] Ваш возраст: {user.age}")
 
 
 # Главное меню
-def show_top_menu(longpoll, user, vk):
+def show_top_menu(user, vk: VkAPI):
     # Показать приветственное сообщение и меню доступных действий
     text = "Добро пожаловать! \n\n"
-    VkAPI.write_msg(user, text, vk)
+    vk.write_msg(user, text)
     show_sub_menu(user, vk)
     # Анализируем ответ пользователя
     while True:
         # ждем какой пункт меню введет пользователь
-        answer_of_user = VkAPI.wait_for_answer_from_user(longpoll)['text']
+        answer_of_user = vk.wait_for_answer_from_user()['text']
         # 1 => Поиск партнера для отношений
         if answer_of_user == "Да":
             menu_start_search(user, vk)
@@ -195,21 +204,21 @@ def show_top_menu(longpoll, user, vk):
         # 2 => подпрограмма, вызываемая если пользователь выбрал 2 пункт меню
         elif answer_of_user == "Нет":
             text = "Если передумаешь, пиши!"
-            VkAPI.write_msg(user, text, vk)
+            vk.write_msg(user, text)
             start_bot_execution()
             break
         # ... если введен несуществующий пункт меню
         else:
             text = "Не понял вашего ответа...\n"
-            VkAPI.write_msg(user, text, vk)
+            vk.write_msg(user, text)
             time.sleep(1)
             show_sub_menu(user, vk)
 
 
 # Показать подменю
-def show_sub_menu(user: User, vk):
+def show_sub_menu(user: User, vk: VkAPI):
     text = "Начать поиск анкет?"
-    VkAPI.write_msg(user, text, vk)
+    vk.write_msg(user, text)
 
 
 def start_bot_execution():
@@ -217,15 +226,14 @@ def start_bot_execution():
     init_database()
 
     # Иницииализируем vk_api
-    vk = vk_api.VkApi(token=group_token)
-    longpoll = VkLongPoll(vk)
+    vk = VkAPI(user_token, group_token)
 
     # получаем словарь с текстом пришедшим от пользователя и его user_id
-    user_data = VkAPI.wait_for_answer_from_user(longpoll)
+    user_data = vk.wait_for_answer_from_user()
     user = User(user_data['user_id'])
 
     # Отобразить главное меню
-    show_top_menu(longpoll, user, vk)
+    show_top_menu(user, vk)
 
 
 if __name__ == '__main__':
